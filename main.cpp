@@ -7,6 +7,9 @@
 #define PROCESS_NAME L"XR_3DA.exe"
 #define MODULE_NAME L"XR_3DA.exe"
 
+bool immortalityEnabled = false;
+HANDLE hImmortalityThread = nullptr;
+
 const uintptr_t BASE_OFFSET = 0x0010BB88;
 const std::vector<uintptr_t> OFFSETS = { 0x0010BB88, 0x18, 0x2C, 0x1C, 0xA10 };
 
@@ -15,6 +18,41 @@ HANDLE OpenGameProcess();
 uintptr_t GetModuleBaseAddress(DWORD processID, const std::wstring& moduleName);
 uintptr_t GetPointerAddress(HANDLE hProcess, uintptr_t baseAddress, const std::vector<uintptr_t>& offsets);
 bool WriteHealth(HANDLE hProcess, uintptr_t address, float value);
+DWORD WINAPI ImmortalityThread(LPVOID lpParam);
+
+DWORD WINAPI ImmortalityThread(LPVOID lpParam) {
+    HWND hwnd = (HWND)lpParam;
+
+    while (immortalityEnabled) {
+
+        DWORD pid = GetProcessIdByName(PROCESS_NAME);
+        HANDLE hProcess = OpenProcess(PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION, FALSE, pid);
+        if (!hProcess) {
+            MessageBox(hwnd, L"Процесс игры не найден!", L"Ошибка", MB_OK | MB_ICONERROR);
+            break;
+        }
+
+        uintptr_t baseAddress = GetModuleBaseAddress(pid, MODULE_NAME);
+        std::wcout << L"Базовый адрес XR_3DA.exe: 0x" << std::hex << baseAddress << std::endl;
+        if (baseAddress == 0) {
+            MessageBox(hwnd, L"Модуль не найден!", L"Ошибка", MB_OK | MB_ICONERROR);
+            CloseHandle(hProcess);
+            break;
+        }
+
+        uintptr_t healthAddr = GetPointerAddress(hProcess, baseAddress, OFFSETS);
+        if (healthAddr == 0) {
+            MessageBox(hwnd, L"Не удалось получить адрес здоровья!", L"Ошибка", MB_OK | MB_ICONERROR);
+            CloseHandle(hProcess);
+            break;
+        }
+
+        WriteHealth(hProcess, healthAddr, 1.0f);
+        CloseHandle(hProcess);
+        Sleep(2000);
+    }
+    return 0;
+}
 
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -25,38 +63,26 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
         if (wmId == IDC_CHECKBOX_IMMORTALITY && wmEvent == BN_CLICKED) {
             BOOL checked = SendMessage((HWND)lParam, BM_GETCHECK, 0, 0) == BST_CHECKED;
-
-            DWORD pid = GetProcessIdByName(PROCESS_NAME);
-            HANDLE hProcess = OpenProcess(PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION, FALSE, pid);
-            if (!hProcess) {
-                MessageBox(hwnd, L"Процесс игры не найден!", L"Ошибка", MB_OK | MB_ICONERROR);
-                break;
-            }
-
-            uintptr_t baseAddress = GetModuleBaseAddress(pid, MODULE_NAME);
-            std::wcout << L"Базовый адрес XR_3DA.exe: 0x" << std::hex << baseAddress << std::endl;
-            if (baseAddress == 0) {
-                MessageBox(hwnd, L"Модуль не найден!", L"Ошибка", MB_OK | MB_ICONERROR);
-                CloseHandle(hProcess);
-                break;
-            }
-
-            uintptr_t healthAddr = GetPointerAddress(hProcess, baseAddress, OFFSETS);
-            if (healthAddr == 0) {
-                MessageBox(hwnd, L"Не удалось получить адрес здоровья!", L"Ошибка", MB_OK | MB_ICONERROR);
-                CloseHandle(hProcess);
-                break;
-            }
-
+            SendMessage((HWND)lParam, BM_SETCHECK, checked ? BST_UNCHECKED : BST_CHECKED, 0);
+            checked = !checked;
             if (checked) {
-                WriteHealth(hProcess, healthAddr, 1.0f);
-                MessageBox(hwnd, L"Бессмертие ВКЛ", L"Статус", MB_OK);
+                immortalityEnabled = true;
+                hImmortalityThread = CreateThread(nullptr, 0, ImmortalityThread, hwnd, 0, nullptr);
             }
-            else {
-                WriteHealth(hProcess, healthAddr, 1.0f);
-                MessageBox(hwnd, L"Бессмертие ВЫКЛ", L"Статус", MB_OK);
+            else
+            {
+                if (immortalityEnabled) {
+                    immortalityEnabled = false;
+
+                    if (hImmortalityThread) {
+                        WaitForSingleObject(hImmortalityThread, INFINITE);
+                        CloseHandle(hImmortalityThread);
+                        hImmortalityThread = nullptr;
+                    }
+                }
             }
-            CloseHandle(hProcess);
+            
+
         }
         break;
     }
